@@ -1,0 +1,31 @@
+version: '3'
+
+services:
+  fastapi:
+    image: tiangolo/uvicorn-gunicorn-fastapi:python3.9
+    volumes:
+      - .:/app
+    ports:
+      - "8000:80"
+    depends_on:
+      - redis
+      - celery_worker
+
+  celery_worker:
+    build: .
+    command: celery -A celery_config.celery_app worker --loglevel=info
+    depends_on:
+      - redis
+
+  flower:
+    image: mher/flower
+    command: celery -A celery_config.celery_app flower --port=5555
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
