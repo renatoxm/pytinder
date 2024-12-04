@@ -40,6 +40,10 @@ class TinderAPI():
     def get_user_info(self, user_id):
         data = requests.get(TINDER_URL + f"/user/{user_id}", headers={"X-Auth-Token": self._token}).json()
         return Person(data["results"], self)
+    
+    def unmatch(self, match_id):
+        data = requests.delete(TINDER_URL + f'/user/matches/{match_id}', headers={"X-Auth-Token": self._token}).json()
+        return data
 
     def send_message(self, match_id, from_id, to_id, message):
         body = {

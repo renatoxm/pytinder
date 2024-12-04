@@ -167,7 +167,7 @@ def show_matches():
     # db.drop_table('persons')
     return persons_table.all()
 
-@app.get('/match/<person_id>')
+@app.get('/match/{person_id}')
 def get_match(person_id):
     tinder_api = TinderAPI(TINDER_TOKEN)
     person = tinder_api.get_user_info(person_id)
@@ -202,6 +202,11 @@ def get_match(person_id):
     # else:
     #     return {"error": "Failed to fetch data"}, response.status_code
 
+@app.get('/unmatch/{match_id}')
+async def unmatch(match_id):
+    tinder_api = TinderAPI(TINDER_TOKEN)
+    return tinder_api.unmatch(match_id)
+
 @app.get('/profile')
 def get_profile():
     # Check if the profile table is empty
@@ -225,7 +230,7 @@ def get_profile():
     # Return the profile information as a dictionary (which will be automatically converted to JSON)
     return profile_data
 
-@app.get('/send-opener/<match_id>/<person_id>')
+@app.get('/send-opener/{match_id}/{person_id}')
 async def send_opener(match_id, person_id):
     tinder_api = TinderAPI(TINDER_TOKEN)
     profile = tinder_api.profile()
@@ -346,4 +351,4 @@ async def monitor():
 #     scheduler.remove_job('reply_messages')
 
 if __name__ == "__main__":
-    uvicorn.run('main:app', host='0.0.0.0', port=8080)
+    uvicorn.run('main:app', host='0.0.0.0', port=8080, reload=True)
