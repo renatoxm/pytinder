@@ -6,3 +6,5 @@ python-dotenv==1.0.1
 Requests==2.32.3
 tinydb==4.8.2
 uvicorn==0.32.0
+flower==2.0.1
+redis==5.2.0

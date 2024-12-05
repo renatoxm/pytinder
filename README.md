@@ -71,12 +71,6 @@ Now, you can run your Python project as you would in a Linux environment:
 python main.py
 ```
 
-#### Run the FastAPI app with Uvicorn
-
-```bash
-uvicorn main:app --reload
-```
-
 ## Handling requirements.txt
 
 you can auto-generate a requirements.txt file for a Python project, which will include all installed packages along with their versions. Here’s how to do it:
@@ -127,6 +121,37 @@ pipenv lock -r > requirements.txt
 
 These methods ensure that you get a `requirements.txt` file tailored to your project's dependencies.
 
+#### Adding one dependency
+
+**Option 1:** Automatically Add to requirements.txt
+
+Run the following command to freeze all installed packages and append, lets call it `package-name`, to your requirements.txt:
+
+```bash
+pip freeze | grep flower >> requirements.txt
+```
+
+**Option 2:** Manually Add to requirements.txt
+
+Find the installed version of `package-name`:
+
+```bash
+pip show package-name
+```
+
+You’ll see output like this:
+
+```bash
+Name: package-name
+Version: 1.2.0
+```
+
+Add this line to your requirements.txt:
+
+```bash
+package-name==1.2.0
+```
+
 ## Celery and Redis
 
 ### Installing Redis Server on Windows with WSL2
@@ -158,6 +183,12 @@ You should see PONG if Redis is up and running.
 
 ```bash
 sudo service redis-server stop
+```
+
+### Clear Redis
+
+```bash
+redis-cli FLUSHALL
 ```
 
 ## Running the app, flower and celery queues

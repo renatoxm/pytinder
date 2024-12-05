@@ -1,7 +1,7 @@
 # import time
 import random
-from fastapi import FastAPI # type: ignore
-from celery.result import AsyncResult
+from fastapi import FastAPI
+from celery.result import AsyncResult # type: ignore
 import os
 from dotenv import load_dotenv # type: ignore
 import requests
@@ -11,7 +11,7 @@ import asyncio
 from apscheduler.schedulers.asyncio import AsyncIOScheduler # type: ignore
 import uvicorn # type: ignore
 from tinydb import TinyDB, Query # type: ignore
-from celery import Celery
+from celery import Celery # type: ignore
 from src.logger import logger
 from src.chatgpt import ChatGPT, DALLE
 from src.models import OpenAIModel
@@ -32,12 +32,11 @@ app = FastAPI()
 scheduler = AsyncIOScheduler()
 
 db = TinyDB('database/db.json')
-maches_table = db.table('matches')
-persons_table = db.table('persons')
+matches_table = db.table('matches')
 profile_table = db.table('profile')
 
 TINDER_TOKEN = os.getenv('TINDER_TOKEN')
-OPENER_MESSAGE = os.getenv("GREETING_MESSAGE")
+GREETING_MESSAGE = os.getenv("GREETING_MESSAGE")
 
 # Configure Celery
 celery = Celery(
@@ -47,13 +46,12 @@ celery = Celery(
 )
 
 @celery.task(name='main.send_tinder_opener')
-def send_tinder_opener(match_id, from_id, to_id, to_name):
-    message = f'Oi {to_name}, como você é linda! Tudo bem com vc?'
-    with open("openers.txt", "a") as file:
+def send_tinder_opener(match_id, from_id, to_id, message):
+    with open("logs/openers.txt", "a") as file:
         file.write(f'\n {message}')
     tinder_api = TinderAPI(TINDER_TOKEN)
     message = tinder_api.send_message(match_id, from_id, to_id, message)
-    with open("openers.txt", "a") as file:
+    with open("logs/openers.txt", "a") as file:
         file.write("\n" + json.dumps(message))
     if message.get("_id"):  # Check if "_id" exists and is not empty
         return message
@@ -61,18 +59,31 @@ def send_tinder_opener(match_id, from_id, to_id, to_name):
         raise ValueError("Failed to send message to user")
     
 @celery.task(name='main.get_tinder_person')
-def get_tinder_person(id):
+def get_tinder_person(match_id, person_id):
     tinder_api = TinderAPI(TINDER_TOKEN)
-    person = tinder_api.get_user_info(id)
+    person = tinder_api.get_user_info(person_id)
     if hasattr(person, "id") and person.id:  # Check if "id" exists and is not empty
         birth_date = person.birth_date.strftime('%Y-%m-%d') if isinstance(person.birth_date, datetime) else person.birth_date
-        objPerson = {'id': person.id, 'name' : person.name, 'distance' : person.distance, 'birth_date': birth_date, 'bio': person.bio}
+        # add only missing fields not present in match
+        objPerson = {
+            'distance' : person.distance, 
+            'birth_date': person.birth_date.strftime('%Y-%m-%dT%H:%M:%S.%fZ') if person.birth_date else None,
+            'bio': person.bio
+        }
         MatchQuery = Query()
-        if not persons_table.contains(MatchQuery.id == person.id):
-            persons_table.insert(objPerson)
-        return objPerson
+        matches_table.update(objPerson, MatchQuery.match_id == match_id)
+        return matches_table.get(MatchQuery.match_id == match_id)
     else:
         raise ValueError("Failed to get profile")
+    
+@celery.task(name='main.unmatch_tinder_person')
+def unmatch_tinder_person(match_id):
+    tinder_api = TinderAPI(TINDER_TOKEN)
+    response = tinder_api.unmatch(match_id)
+    if response.status_code == 200:
+        matches_table.remove(match_id == match_id)
+        return "ok"
+    raise ValueError("Failed to unmatch")
 
 @app.get('/')
 def hello_world():
@@ -87,33 +98,34 @@ def get_matches():
     for match in matches:
         # logger.info(f'Name: {match["person"]["name"]}, Id: {match["id"]}')
         # save matches in a txt file
-        # with open("matches.txt", "a") as file:
+        # with open("logs/matches.txt", "a") as file:
             # file.write(f'\n match_id: {match.match_id}, id: {match.person.id}, name: {match.person.name}, message: {message}')
         # save all matches
         MatchQuery = Query()
         # Check if a record with the same match_id exists
-        # if maches_table.contains(MatchQuery.match_id == match.match_id):
+        # if matches_table.contains(MatchQuery.match_id == match.match_id):
         #     # Update the existing record
-        #     maches_table.update({'match_id': match.match_id, 'person_id' : match.person.id, 'name' : match.person.name})
+        #     matches_table.update({'match_id': match.match_id, 'person_id' : match.person.id, 'name' : match.person.name})
         # else:
         #     # Insert as a new record
-        #     maches_table.insert({'match_id': match.match_id, 'person_id' : match.person.id, 'name' : match.person.name})
-        if not maches_table.contains(MatchQuery.match_id == match.match_id):
+        #     matches_table.insert({'match_id': match.match_id, 'person_id' : match.person.id, 'name' : match.person.name})
+        if not matches_table.contains(MatchQuery.match_id == match.match_id):
             # Insert as a new record
-            maches_table.insert({'match_id': match.match_id, 'person_id' : match.person.id, 'name' : match.person.name})
+            matches_table.insert({'match_id': match.match_id, 'person_id' : match.person.id, 'name' : match.person.name})
                  
         # Save data to a JSON file (TypeError: Object of type Match is not JSON serializable)
-        # with open("matches.json", "w") as json_file:
+        # with open("logs/matches.json", "w") as json_file:
         #     json.dump(matches, json_file, indent=4)
     # Read the JSON-formatted content from the file (TypeError: Object of type Match is not JSON serializable)
-    # with open("matches.json", "r") as file:
+    # with open("logs/matches.json", "r") as file:
     #     data = json.load(file)
     return 'ok'
 
+# save all matches in matches_table
 @app.get('/all-matches')
 def get_all_matches():
     tinder_api = TinderAPI(TINDER_TOKEN)
-    message = 1
+    message = 1 # 1 for one or more messages, 0 for matches with no messages between them
     all_matches = []
     page_token = None
 
@@ -126,9 +138,9 @@ def get_all_matches():
         # Process each match
         for match in matches:
             MatchQuery = Query()
-            if not maches_table.contains(MatchQuery.match_id == match.match_id):
+            if not matches_table.contains(MatchQuery.match_id == match.match_id):
                 # Insert as a new record
-                maches_table.insert({
+                matches_table.insert({
                     'match_id': match.match_id,
                     'person_id': match.person.id,
                     'name': match.person.name
@@ -141,48 +153,64 @@ def get_all_matches():
         if not page_token:
             break
 
-    return maches_table.all()
+    return matches_table.all()
 
+# first run '/all-matches' route to fill your table
+# it will only append the task if match does not already have distance att
+# make sure celery and flow are running, see: ## Running the app, flower and celery queues in README.md
 @app.get('/all-persons')
 def get_all_persons():
     cumulative_delay = 0
     task_info = []
     # limit table rows
     # limit = 5
-    # matches = maches_table.all()[:limit]
-    matches = maches_table.all()
+    # matches = matches_table.all()[:limit]
+    matches = matches_table.all()
     for row in matches:
-        delay = random.randint(10, 20)
-        cumulative_delay += delay
-        task = get_tinder_person.apply_async((row.get('person_id'),),countdown=cumulative_delay)  # 15-20-second cumulative delay before starting
-        task_info.append({"status": "Task started", "task_id": task.id, "delay": delay})
+        if 'distance' not in row:
+            delay = random.randint(5, 10)
+            cumulative_delay += delay
+            task = get_tinder_person.apply_async((row.get('match_id'),row.get('person_id'),),countdown=cumulative_delay)  # 15-20-second cumulative delay before starting
+            task_info.append({"status": "Task started", "task_id": task.id, "delay": delay})
     return task_info
 
 @app.get('/matches/show')
 def show_matches():
-    return maches_table.all()
+    return matches_table.all()
 
-@app.get('/persons/show')
-def show_matches():
-    # db.drop_table('persons')
-    return persons_table.all()
-
-@app.get('/match/{person_id}')
-def get_match(person_id):
-    tinder_api = TinderAPI(TINDER_TOKEN)
-    person = tinder_api.get_user_info(person_id)
-    objPerson = {'id': person.id, 'name' : person.name, 'distance' : person.distance, 'birth_date': person.birth_date, 'bio': person.bio}
-    # with open("matches.txt", "a") as file:
-    #     file.write(f'\n id: {person.id}, name: {person.name}, distance: {person.distance}')
+@app.get('/matches/totals')
+def show_matches_totals():
     MatchQuery = Query()
-    # Check if a record with the same match_id exists
-    if persons_table.contains(MatchQuery.id == person.id):
-        # Update the existing record
-        persons_table.update(objPerson)
+    total_matches = len(matches_table)
+    under_15 = len(matches_table.search(MatchQuery.distance < 15))
+    over_15 = len(matches_table.search(MatchQuery.distance >= 15))
+    return {
+        "total_matches": total_matches,
+        "under_15": under_15,
+        "over_15": over_15
+    }
+
+@app.get('/match/{match_id}')
+def get_match(match_id):
+    match_query = Query()
+    row = matches_table.get(match_query.match_id == match_id)
+    if row:
+            person_id = row['person_id']
+            tinder_api = TinderAPI(TINDER_TOKEN)
+            person = tinder_api.get_user_info(person_id)
+            obj_person = {
+                'distance': person.distance,
+                'birth_date': person.birth_date.strftime('%Y-%m-%dT%H:%M:%S.%fZ') if person.birth_date else None,
+                'bio': person.bio
+            }
+            
+            # Update existing row
+            matches_table.update(obj_person, match_query.match_id == match_id)
+            return matches_table.get(match_query.match_id == match_id)
+
     else:
-        # Insert as a new record
-        persons_table.insert(objPerson)
-    return objPerson
+        return {"error": "Match no found"}
+
     # url = f'https://api.gotinder.com/user/{match_id}?locale=pt'
 
     # api_token = os.getenv('API_TOKEN')
@@ -205,7 +233,35 @@ def get_match(person_id):
 @app.get('/unmatch/{match_id}')
 async def unmatch(match_id):
     tinder_api = TinderAPI(TINDER_TOKEN)
-    return tinder_api.unmatch(match_id)
+    response = tinder_api.unmatch(match_id)
+    if response.status_code == 200:
+        matches_table.remove(match_id == match_id)
+        return "ok"
+    raise ValueError("Failed to unmatch")
+
+@app.get('/unmatch-all-persons-distant')
+def unmatch_all_distant():
+    tinder_api = TinderAPI(TINDER_TOKEN)
+    cumulative_delay = 0
+    task_info = []
+    # limit table rows
+    # limit = 5
+    # matches = matches_table.all()[:limit]
+    matches = matches_table.all()
+    for row in matches:
+        match_id = row.get("match_id")
+        if not match_id:
+            continue  # Skip rows with no match_id
+        # Skip persons distant more than 15 km
+        if row.get("distance") < 15:
+            continue
+        # Schedule task with a cumulative delay
+        delay = random.randint(10, 20)
+        cumulative_delay += delay
+        # unmatch distant persons
+        task = unmatch_tinder_person.apply_async((match_id,), countdown=cumulative_delay)
+        task_info.append({"status": "Task started", "task_id": task.id, "delay": delay})
+    return task_info
 
 @app.get('/profile')
 def get_profile():
@@ -230,25 +286,32 @@ def get_profile():
     # Return the profile information as a dictionary (which will be automatically converted to JSON)
     return profile_data
 
-@app.get('/send-opener/{match_id}/{person_id}')
-async def send_opener(match_id, person_id):
+@app.get('/send-opener/{match_id}')
+async def send_opener(match_id):
     tinder_api = TinderAPI(TINDER_TOKEN)
     profile = tinder_api.profile()
-    person = tinder_api.get_user_info(person_id)
+
+    # Fetch person details from matches_table using match_id
+    MatchQuery = Query()
+    match = matches_table.get(MatchQuery.match_id == match_id)
+
+    if not match:
+        return {"error": "Match not found"}
 
     # write your opener message below
-    # message = f'Oi {person.name}, como você é linda! Tudo bem com vc?'
-    message = OPENER_MESSAGE.replace("<match_name>", person.name)
-    with open("messages.txt", "a") as file:
+    # message = f'Hi {to_name}, how are you doing?'
+    first_name = match["name"].strip().split()[0] if match["name"].strip() else ''
+    message = GREETING_MESSAGE.replace("<match_name>", first_name)
+    with open("logs/messages.txt", "a") as file:
         file.write(f'\n {message}')
     tinder_api = TinderAPI(TINDER_TOKEN)
-    message = tinder_api.send_message(match_id, profile.id, person.id, message)
-    with open("messages.txt", "a") as file:
+    message = tinder_api.send_message(match_id, profile.id, match["person_id"], message)
+    with open("logs/messages.txt", "a") as file:
         file.write("\n" + json.dumps(message))
-    return message if message._id != '' else {"error": "Failed to send message to user"}
+    return message if message.get("_id") else {"error": "Failed to send message to user"}
 
     # delay = random.randint(5, 10)
-    # task = send_tinder_opener.apply_async((match_id, profile.id, person.id, person.name),countdown=delay)  # 5-10-second delay before starting
+    # task = send_tinder_opener.apply_async((match_id, profile.id, person.id, message),countdown=delay)  # 5-10-second delay before starting
     # return {"status": "Task started", "task_id": task.id, "delay": delay}
 
 @app.get('/dispatch-openers')
@@ -261,12 +324,42 @@ async def dispatch_openers():
     cumulative_delay = 0
     for match in matches:
         first_name = match.person.name.strip().split()[0] if match.person.name.strip() else ''
-        with open("openers.txt", "a") as file:
+        message = GREETING_MESSAGE.replace("<match_name>", first_name)
+        with open("logs/openers.txt", "a") as file:
             file.write(f'\n match_id: {match.match_id}, id: {match.person.id}, name: {match.person.name}, first_name: {first_name}, message: {message}')
-        delay = random.randint(15, 60)
+        delay = random.randint(5, 10)
         cumulative_delay += delay
-        task = send_tinder_opener.apply_async((match.match_id, profile.id, match.person.id, first_name),countdown=cumulative_delay)  # 15-60-second cumulative delay before starting
+        task = send_tinder_opener.apply_async((match.match_id, profile.id, match.person.id, message),countdown=cumulative_delay)  # 15-60-second cumulative delay before starting
         task_info.append({"status": "Task started", "task_id": task.id, "delay": delay})
+    return task_info
+
+@app.get('/dispatch-openers-from-table')
+async def dispatch_openers_from_table():
+    tinder_api = TinderAPI(TINDER_TOKEN)
+    profile = tinder_api.profile()
+    task_info = []
+    cumulative_delay = 0
+    counter = 0
+    matches = matches_table.all()  # Get all matches from the TinyDB table
+    for match in matches:
+        if match.get("distance", 0) > 15:  # Skip matches with a distance over 15
+            continue
+        first_name = match["name"].strip().split()[0] if match["name"].strip() else ''
+        message = GREETING_MESSAGE.replace("<match_name>", first_name)
+        with open("logs/openers.txt", "a") as file:
+            file.write(
+                f'\n match_id: {match["match_id"]}, id: {match["person_id"]}, name: {match["name"]}, '
+                f'first_name: {first_name}, message: {message}'
+            )
+        delay = random.randint(5, 10)
+        cumulative_delay += delay
+        counter += 1
+        task = send_tinder_opener.apply_async(
+            (match["match_id"], profile.id, match["person_id"], message),
+            countdown=cumulative_delay
+        )
+        task_info.append({"status": "Task started", "task_id": task.id, "delay": cumulative_delay})
+    
     return task_info
 
 @app.get('/export-messages')
@@ -281,14 +374,14 @@ def export_valuable_messages():
     combine_json_files(user_id)
 
 def combine_json_files(user_id):
-    file_path = f'chat_data/{user_id}'
+    file_path = f'logs/chat_data/{user_id}'
     json_files = [file for file in os.listdir(file_path) if file.endswith('.json')]
     combined_data = []
     for file in json_files:
-        with open(f'chat_data/{user_id}/{file}', 'r') as f:
+        with open(f'logs/chat_data/{user_id}/{file}', 'r') as f:
             data = json.load(f)
             combined_data.append(data)
-    with open(f'chat_data/{user_id}/combined.jsonl', 'w', encoding="utf-8") as f:
+    with open(f'logs/chat_data/{user_id}/combined.jsonl', 'w', encoding="utf-8") as f:
         for item in combined_data:
             json.dump(item, f, ensure_ascii=False)
             f.write('\n')
